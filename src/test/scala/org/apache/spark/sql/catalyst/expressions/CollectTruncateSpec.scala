@@ -5,7 +5,6 @@ import org.apache.spark.sql.Row
 import org.apache.spark.sql.functions.{explode, struct, udf}
 import org.scalatest.{FunSpec, Matchers}
 
-
 class CollectTruncateSpec extends FunSpec with Matchers with DataFrameSuiteBase
   with RDDComparisons with SharedSparkContext {
 
@@ -20,7 +19,6 @@ class CollectTruncateSpec extends FunSpec with Matchers with DataFrameSuiteBase
         agg(
           CollectLimit.collect_list_limit(struct($"id", $"name"), 3).as("top")
         )
-      limited.show(10, false)
       val correct = sc.parallelize(List(
         Row("yes", 3),
         Row("no", 3)
@@ -32,7 +30,6 @@ class CollectTruncateSpec extends FunSpec with Matchers with DataFrameSuiteBase
       val df = sc.parallelize(List(1, 2, 3, 4, 5, 6, 7, 8, 9, 0)).toDF("num")
       val size = udf { x: Seq[Row] => x.size }
       val limited = df.agg(CollectLimit.collect_list_limit($"num", 4).as("lst"))
-      limited.show(10, false)
       val correct = sc.parallelize(List(Row(4)))
       compareRDD(limited.select(size($"lst").as("cnt")).rdd, correct) should be(None)
     }
@@ -44,7 +41,6 @@ class CollectTruncateSpec extends FunSpec with Matchers with DataFrameSuiteBase
         agg(
           CollectLimit.collect_list_limit($"name", 2).as("names")
         )
-      limited.show(10, false)
       val result = limited.select($"id", explode($"names").as("name")).rdd
       val correct = df.select($"id", $"name").rdd
       compareRDD(result, correct) should be(None)

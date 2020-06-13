@@ -7,7 +7,6 @@ import org.apache.spark.sql.functions.{explode, struct}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StringType}
 import org.scalatest.{FunSpec, Matchers}
 
-
 class CollectTopSpec extends FunSpec with Matchers with DataFrameSuiteBase
   with RDDComparisons with SharedSparkContext {
 
@@ -49,7 +48,6 @@ class CollectTopSpec extends FunSpec with Matchers with DataFrameSuiteBase
         ).
         withColumn("primarch", explode($"top")).
         select($"loyal", $"primarch.id".as("id"), $"primarch.name".as("name"))
-      limited.show(10, false)
       val correct = sc.parallelize(List(
         Row("yes", 1, "Lion El'Jonson"),
         Row("yes", 5, "Jaghatai Khan"),
@@ -68,7 +66,6 @@ class CollectTopSpec extends FunSpec with Matchers with DataFrameSuiteBase
         ).
         withColumn("primarch", explode($"top")).
         select($"loyal", $"primarch.id".as("id"), $"primarch.name".as("name"))
-      limited.show(10, false)
       val correct = sc.parallelize(List(
         Row("yes", 18, "Vulkan"),
         Row("yes", 19, "Corvus Corax"),
@@ -85,7 +82,6 @@ class CollectTopSpec extends FunSpec with Matchers with DataFrameSuiteBase
         agg(
           CollectLimit.collect_top(struct($"name"), DescStruct(0, StringType), 2).as("names")
         )
-      limited.show(10, false)
       val result = limited.select($"id", explode($"names").as("nameStruct")).
         select($"id", $"nameStruct.name".as("name")).rdd
       val correct = df.select($"id", $"name").rdd
