@@ -4,50 +4,83 @@ import java.io.{ByteArrayInputStream, ObjectInputStream, ObjectOutputStream}
 
 import org.apache.commons.io.output.ByteArrayOutputStream
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.aggregate.{Collect, ImperativeAggregate, TypedImperativeAggregate}
+import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
 import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.types.{ArrayType, DataType}
 
 import scala.collection.mutable
+import scala.util.Random
 
 case class WeightedItem[T](
-    body: T,
-    weight: Double
+   body: T,
+   weight: Double,
+   priority: Double
 )
 
+object WeightedItem {
+ implicit def orderingByPriority[A <: WeightedItem[_]]: Ordering[A] =
+   Ordering.by(item => item.priority)
+}
+
+/**
+ * A-ExpJ Reservoir implementation with merge option
+ * @param buffer Reservoir PriorityQueue buffer dequeue extracts Max, therefore priority it's = to -log(weightKey)
+ *               of the original algorithm
+ * @param weightsToSkip
+ * @param passedWeight
+ * @param limit Reservoir size
+ * @tparam T
+ */
 case class Reservoir[T](
-    buffer: mutable.ArrayBuffer[WeightedItem[T]],
-    var weight: Double,
+    buffer: mutable.PriorityQueue[WeightedItem[T]],
+    weightsToSkip: Double,
+    passedWeight: Double,
     limit: Int) {
 
   def isFull: Boolean = buffer.length == limit
 
-  def add(item: WeightedItem[T]): Reservoir[T] = {
+  def add(item: T, weight: Double): Reservoir[T] = {
     if (isFull) {
-      // FIXME: replace stub with implementation
-      replace(item, 0)
-    } else append(item)
+      if (weight >= weightsToSkip) {
+        replace(item, weight)
+      } else discard(weight)
+    } else append(item, weight)
   }
 
   def merge(other: Reservoir[T]): Reservoir[T] = {
     // FIXME: replace stub with implementation
-    this.copy(weight = weight + other.weight)
+    copy(
+      passedWeight = passedWeight + other.passedWeight,
+      weightsToSkip = weightsToSkip + other.weightsToSkip
+    )
   }
 
-  private[this] def append(item: WeightedItem[T]): Reservoir[T] = {
-    copy(buffer = buffer :+ item, weight = weight + item.weight)
+  private[this] def discard(weight: Double): Reservoir[T] = {
+    copy(passedWeight = passedWeight + weight, weightsToSkip = weightsToSkip - weight)
   }
 
-  private[this] def replace(item: WeightedItem[T], position: Int): Reservoir[T] = {
-    this.buffer(position) = item
-    copy(weight = weight + item.weight)
+  private[this] def append(item: T, weight: Double): Reservoir[T] = {
+    val negPriority = math.log(Random.nextDouble()) / weight
+    buffer += WeightedItem(item, weight, -negPriority)
+    val weightsToSkip = if (buffer.length == limit) math.log(Random.nextDouble) / (-buffer.head.priority) else 0.0
+    copy(passedWeight = passedWeight + weight, weightsToSkip = weightsToSkip)
   }
 
+  private[this] def replace(item: T, weight: Double): Reservoir[T] = {
+    val offset = math.exp(-buffer.head.priority * weight)
+    val negPriority = math.log((1 - offset) * Random.nextDouble + offset) / weight
+    buffer.dequeue()
+    buffer += WeightedItem(item, weight, -negPriority)
+    copy(
+      passedWeight = passedWeight + weight,
+      weightsToSkip = math.log(Random.nextDouble) / (-buffer.head.priority)
+    )
+  }
 }
 
 @ExpressionDescription(
-  usage = "_FUNC_(expr) - Collects and returns a list of <size> non-unique elements " +
-    "out of origin list with equal probabilities.")
+ usage = "_FUNC_(expr) - Collects and returns a list of <size> non-unique elements " +
+   "out of origin list with equal probabilities.")
 private case class CollectSample(
     child: Expression,
     limit: Int,
@@ -65,13 +98,13 @@ private case class CollectSample(
   override def prettyName: String = "collect_sample"
 
   override def createAggregationBuffer(): Reservoir[Any] =
-    Reservoir(mutable.ArrayBuffer.empty, 0.0, limit)
+    Reservoir(mutable.PriorityQueue.empty, 0.0, 0.0, limit)
 
   override def update(reservoir: Reservoir[Any], input: InternalRow): Reservoir[Any] = {
     val value = child.eval(input)
     if (value != null) {
-      val item = WeightedItem(body = InternalRow.copyValue(value), weight = 1.0)
-      reservoir.add(item)
+      val item = InternalRow.copyValue(value)
+      reservoir.add(item, 1.0)
     } else reservoir
   }
 
@@ -87,7 +120,14 @@ private case class CollectSample(
           else (rightReservoir, leftReservoir)
         }
       }
-      incompleteReservoir.buffer.foldLeft(reservoir) { (reservoir, item) => reservoir.add(item) }
+      val itemWeight = reservoir.passedWeight / reservoir.buffer.length
+      reservoir.buffer.foldLeft(incompleteReservoir) {
+        (reservoir, item) => reservoir.add(item.body, itemWeight)
+      }
+      val resultReservoir = incompleteReservoir.copy(
+        weightsToSkip = incompleteReservoir.weightsToSkip + reservoir.weightsToSkip
+      )
+      resultReservoir
     }
   }
 
@@ -115,5 +155,4 @@ private case class CollectSample(
   override def nullable: Boolean = true
 
   override def dataType: DataType = ArrayType(child.dataType)
-
 }
