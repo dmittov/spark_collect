@@ -3,3 +3,7 @@
 .idea
 project
 target
+# vscode
+.bloop/
+.metals/
+.vscode/
